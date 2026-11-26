@@ -21,8 +21,9 @@ enum class WarningLevel {
 class UsageTracker(private val repository: PolicyRepository) {
 
     companion object {
-        private const val SESSION_IDLE_RESET_MS = 5 * 60 * 1000L
-        private const val SESSION_COOLDOWN_MS = 15 * 60 * 1000L
+        // Strict guidelines: short idle reset (2m) and longer cooldown (30m)
+        private const val SESSION_IDLE_RESET_MS = 2 * 60 * 1000L
+        private const val SESSION_COOLDOWN_MS = 30 * 60 * 1000L
     }
 
     suspend fun tickAndEvaluate(
@@ -31,6 +32,8 @@ class UsageTracker(private val repository: PolicyRepository) {
         elapsedSeconds: Long,
         nowMs: Long = System.currentTimeMillis()
     ): EvaluationResult {
+        if (packageName != "com.instagram.android") return EvaluationResult.Allowed
+
         val policy = repository.getPolicy(packageName)
         if (!policy.enabled) return EvaluationResult.Allowed
 
@@ -40,14 +43,14 @@ class UsageTracker(private val repository: PolicyRepository) {
         }
 
         if (policy.blockAllFeatures) {
-            return EvaluationResult.Blocked("All Instagram features are currently set to blocked.")
+            return EvaluationResult.Blocked("Strict rule: All Instagram features are blocked.")
         }
 
         val rule = policy.rules[feature] ?: return EvaluationResult.Allowed
 
         return when (rule.mode) {
             BlockMode.ALLOW -> EvaluationResult.Allowed
-            BlockMode.BLOCK -> EvaluationResult.Blocked("${feature.displayName} are blocked right now.")
+            BlockMode.BLOCK -> EvaluationResult.Blocked("Strict rule: ${feature.displayName} is blocked.")
             BlockMode.TIMED -> evaluateTimedRule(feature, rule, elapsedSeconds, today.toString(), nowMs)
         }
     }
@@ -71,7 +74,7 @@ class UsageTracker(private val repository: PolicyRepository) {
         if (state.cooldownUntilEpochMs > nowMs) {
             val minsLeft = ((state.cooldownUntilEpochMs - nowMs) / 60_000L) + 1
             return EvaluationResult.Blocked(
-                "${feature.displayName} session limit reached (${minsLeft}m cooldown left)."
+                "Strict cooldown active for ${feature.displayName} (${minsLeft}m left)."
             )
         }
 
@@ -96,7 +99,7 @@ class UsageTracker(private val repository: PolicyRepository) {
                 persistFeatureState(snapshot, feature, lockedState)
             }
             return EvaluationResult.Blocked(
-                "Daily timer (${rule.dailyLimitMinutes}m) reached for ${feature.displayName}."
+                "Strict daily cap (${rule.dailyLimitMinutes}m) reached for ${feature.displayName}."
             )
         }
 
@@ -111,7 +114,7 @@ class UsageTracker(private val repository: PolicyRepository) {
                 persistFeatureState(snapshot, feature, cooldownState)
             }
             return EvaluationResult.Blocked(
-                "${rule.sessionLimitMinutes}m session timer reached for ${feature.displayName}."
+                "Strict session cap (${rule.sessionLimitMinutes}m) reached — 30m cooldown started."
             )
         }
 
