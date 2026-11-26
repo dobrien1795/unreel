@@ -33,10 +33,12 @@ class OverlayAlertManager(private val context: Context) {
             "Unreel: $formatted remaining"
         }
 
-        if (bannerView != null) {
-            (bannerView as? TextView)?.text = label
+        if (bannerView != null && (bannerView as? TextView) != null) {
+            (bannerView as TextView).text = label
             return
         }
+
+        dismissBanner()
 
         val pill = TextView(context).apply {
             text = label
@@ -75,18 +77,18 @@ class OverlayAlertManager(private val context: Context) {
 
         val container = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(44, 26, 44, 26)
+            setPadding(44, 28, 44, 28)
             background = GradientDrawable().apply {
                 cornerRadius = 36f
-                setColor(Color.parseColor("#1E1E24"))
-                setStroke(2, Color.parseColor("#FF5252"))
+                setColor(Color.parseColor("#181C24"))
+                setStroke(3, Color.parseColor("#8AB4F8"))
             }
         }
 
         val title = TextView(context).apply {
-            text = "Unreel Blocked"
-            setTextColor(Color.parseColor("#FF8A80"))
-            textSize = 14f
+            text = "Reels are blocked"
+            setTextColor(Color.parseColor("#8AB4F8"))
+            textSize = 15f
         }
         val body = TextView(context).apply {
             text = reason
@@ -103,7 +105,8 @@ class OverlayAlertManager(private val context: Context) {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.CENTER
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = 150
         }
 
         runCatching {

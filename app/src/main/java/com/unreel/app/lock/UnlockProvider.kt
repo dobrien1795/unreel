@@ -12,14 +12,15 @@ interface UnlockProvider {
 class StrictTimeLockProvider : UnlockProvider {
 
     override fun canModifyPolicy(current: AppPolicy, proposed: AppPolicy, nowMs: Long): Boolean {
+        if (!current.strictLockMode) return true
         if (isMakingStricter(current, proposed)) return true
         return nowMs >= current.settingsLockedUntilEpochMs
     }
 
     override fun lockReason(current: AppPolicy, nowMs: Long): String? {
-        if (nowMs >= current.settingsLockedUntilEpochMs) return null
+        if (!current.strictLockMode || nowMs >= current.settingsLockedUntilEpochMs) return null
         val mins = ((current.settingsLockedUntilEpochMs - nowMs) / 60_000L) + 1
-        return "Settings locked for ${mins}m (NFC override coming in v2)."
+        return "Settings locked for ${mins}m."
     }
 
     private fun isMakingStricter(current: AppPolicy, proposed: AppPolicy): Boolean {

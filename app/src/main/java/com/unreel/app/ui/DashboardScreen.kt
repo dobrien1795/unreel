@@ -3,20 +3,24 @@ package com.unreel.app.ui
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import com.unreel.app.R
 import com.unreel.app.data.*
 import java.time.DayOfWeek
 import java.time.format.TextStyle
@@ -30,26 +34,35 @@ fun DashboardScreen(viewModel: MainViewModel) {
     val usage by viewModel.usageSnapshot.collectAsState()
     val lockMessage by viewModel.lockBannerMessage.collectAsState()
 
-    val isOverlayGranted = remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+    val isOverlayGranted = remember(context) { mutableStateOf(Settings.canDrawOverlays(context)) }
+    val isLocked = policy.strictLockMode && System.currentTimeMillis() < policy.settingsLockedUntilEpochMs
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Shield, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_unreel_logo),
+                            contentDescription = "Unreel logo",
+                            modifier = Modifier.size(28.dp)
+                        )
                         Spacer(Modifier.width(10.dp))
                         Text("Unreel", fontWeight = FontWeight.Bold)
                     }
                 },
                 actions = {
-                    FilledTonalButton(
-                        onClick = { viewModel.lockSettingsForHours(12) },
-                        modifier = Modifier.padding(end = 12.dp)
+                    OutlinedButton(
+                        onClick = { viewModel.toggleLockMode() },
+                        modifier = Modifier.padding(end = 12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isLocked) Color(0xFF4A2525) else Color(0xFF1F2937),
+                            contentColor = if (isLocked) Color(0xFFFFB4AB) else Color(0xFF93C5FD)
+                        )
                     ) {
-                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Lock 12h")
+                        Text(if (isLocked) "Locked (Test Off)" else "Lock Off (Test)")
                     }
                 }
             )
@@ -74,7 +87,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
             if (lockMessage != null) {
                 item {
                     Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
                     ) {
                         Row(
                             modifier = Modifier
@@ -85,7 +98,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                         ) {
                             Text(
                                 text = lockMessage!!,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
                                 modifier = Modifier.weight(1f)
                             )
                             TextButton(onClick = { viewModel.clearMessage() }) {
@@ -106,7 +119,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                         ) {
                             Column {
                                 Text("Target App: Instagram", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Text("More apps supported in future releases", style = MaterialTheme.typography.bodySmall)
+                                Text("Only restricted features trigger actions", style = MaterialTheme.typography.bodySmall)
                             }
                             Switch(
                                 checked = policy.enabled,
@@ -123,7 +136,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                         ) {
                             Column(Modifier.weight(1f)) {
                                 Text("Block All Features", fontWeight = FontWeight.SemiBold)
-                                Text("Immediately lock Feed, Stories, Reels & Explore", style = MaterialTheme.typography.bodySmall)
+                                Text("Lock Feed, Stories, Reels & Explore together", style = MaterialTheme.typography.bodySmall)
                             }
                             Switch(
                                 checked = policy.blockAllFeatures,
@@ -137,7 +150,18 @@ fun DashboardScreen(viewModel: MainViewModel) {
             item {
                 Card(shape = RoundedCornerShape(16.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Active Days", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Active Days", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Text(
+                                "Blue = Selected • Grey = Off",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF93C5FD)
+                            )
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -148,8 +172,21 @@ fun DashboardScreen(viewModel: MainViewModel) {
                                     selected = selected,
                                     onClick = { viewModel.toggleDay(day) },
                                     label = {
-                                        Text(day.getDisplayName(TextStyle.SHORT, Locale.getDefault()).take(2))
-                                    }
+                                        Text(
+                                            text = day.getDisplayName(TextStyle.SHORT, Locale.getDefault()).take(2),
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    border = BorderStroke(
+                                        width = if (selected) 1.5.dp else 1.dp,
+                                        color = if (selected) Color(0xFF8AB4F8) else Color(0xFF475569)
+                                    ),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = Color(0xFF1D4ED8),
+                                        selectedLabelColor = Color.White,
+                                        containerColor = Color(0xFF1E222B),
+                                        labelColor = Color(0xFF94A3B8)
+                                    )
                                 )
                             }
                         }
@@ -245,7 +282,7 @@ private fun FeatureControlCard(
 
             if (feature == AppFeature.REELS) {
                 Text(
-                    "Single Reels sent in DMs remain playable; scrolling to next Reel is blocked.",
+                    "Single Reels sent in DMs remain playable; scrolling to next Reel returns to main feed.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary
                 )
@@ -265,20 +302,21 @@ private fun FeatureControlCard(
             }
 
             if (rule.mode == BlockMode.TIMED && !disabledByMaster) {
+                val combinedMinutes = rule.sessionLimitMinutes.coerceIn(5, 60)
+                val syncedDailyMinutes = (combinedMinutes * 3).coerceIn(15, 180)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Session Limit: ${rule.sessionLimitMinutes} min at a time", style = MaterialTheme.typography.bodySmall)
-                    Slider(
-                        value = rule.sessionLimitMinutes.toFloat(),
-                        onValueChange = { onTimerChange(it.toInt(), rule.dailyLimitMinutes) },
-                        valueRange = 5f..60f,
-                        steps = 10
+                    Text(
+                        text = "Session & Daily Timer: ${combinedMinutes}m session / ${syncedDailyMinutes}m daily",
+                        style = MaterialTheme.typography.bodySmall
                     )
-
-                    Text("Daily Total Cap: ${rule.dailyLimitMinutes} min / day", style = MaterialTheme.typography.bodySmall)
                     Slider(
-                        value = rule.dailyLimitMinutes.toFloat(),
-                        onValueChange = { onTimerChange(rule.sessionLimitMinutes, it.toInt()) },
-                        valueRange = 15f..180f,
+                        value = combinedMinutes.toFloat(),
+                        onValueChange = { selected ->
+                            val sessionVal = selected.toInt().coerceIn(5, 60)
+                            val dailyVal = (sessionVal * 3).coerceIn(15, 180)
+                            onTimerChange(sessionVal, dailyVal)
+                        },
+                        valueRange = 5f..60f,
                         steps = 10
                     )
                 }

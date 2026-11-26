@@ -72,12 +72,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun lockSettingsForHours(hours: Int) {
+    fun toggleLockMode() {
         viewModelScope.launch {
             val current = instagramPolicy.value
-            val lockUntil = System.currentTimeMillis() + (hours * 3_600_000L)
-            repository.savePolicy(current.copy(settingsLockedUntilEpochMs = lockUntil))
-            _lockBannerMessage.value = "Settings locked for $hours hour(s)."
+            val now = System.currentTimeMillis()
+            val isCurrentlyLocked = current.strictLockMode && now < current.settingsLockedUntilEpochMs
+            if (isCurrentlyLocked) {
+                repository.savePolicy(
+                    current.copy(
+                        strictLockMode = false,
+                        settingsLockedUntilEpochMs = 0L
+                    )
+                )
+                _lockBannerMessage.value = "Lock unlocked for testing."
+            } else {
+                val lockUntil = now + (12 * 3_600_000L)
+                repository.savePolicy(
+                    current.copy(
+                        strictLockMode = true,
+                        settingsLockedUntilEpochMs = lockUntil
+                    )
+                )
+                _lockBannerMessage.value = "Settings locked for 12h."
+            }
         }
     }
 

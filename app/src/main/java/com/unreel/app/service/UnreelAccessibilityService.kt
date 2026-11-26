@@ -2,6 +2,7 @@ package com.unreel.app.service
 
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import com.unreel.app.data.AppFeature
 import com.unreel.app.data.EvaluationResult
 import com.unreel.app.data.PolicyRepository
@@ -25,7 +26,8 @@ class UnreelAccessibilityService : AccessibilityService() {
     private var activePackage: String? = null
     private var activeFeature: AppFeature? = null
     private var tickerJob: Job? = null
-    private var lastBlockActionMs: Long = 0L
+    private var lastRedirectActionMs: Long = 0L
+    private var pendingRedirectSteps: Int = 0
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -40,6 +42,7 @@ class UnreelAccessibilityService : AccessibilityService() {
         if (pkg != "com.instagram.android") {
             activePackage = null
             activeFeature = null
+            pendingRedirectSteps = 0
             overlayManager.dismissBanner()
             return
         }
@@ -55,12 +58,15 @@ class UnreelAccessibilityService : AccessibilityService() {
         activeFeature = surface.feature
 
         if (surface.feature == null) {
+            if (surface.isHomeFeedActive) {
+                pendingRedirectSteps = 0
+            }
             overlayManager.dismissBanner()
             return
         }
 
         serviceScope.launch {
-            enforceFeature(pkg, surface.feature, elapsedSeconds = 0L)
+            enforceFeature(pkg, surface.feature, root, surface.isHomeFeedActive, elapsedSeconds = 0L)
         }
     }
 
@@ -71,9 +77,17 @@ class UnreelAccessibilityService : AccessibilityService() {
                 delay(1000L)
                 val pkg = activePackage
                 val feature = activeFeature
-                if (pkg != null && feature != null) {
-                    enforceFeature(pkg, feature, elapsedSeconds = 1L)
+                val root = rootInActiveWindow
+                if (pkg != "com.instagram.android" || feature == null || root == null) {
+                    continue
                 }
+                val surface = detector.detect(root)
+                if (surface.feature == null) {
+                    activeFeature = null
+                    overlayManager.dismissBanner()
+                    continue
+                }
+                enforceFeature(pkg, surface.feature, root, surface.isHomeFeedActive, elapsedSeconds = 1L)
             }
         }
     }
@@ -81,37 +95,87 @@ class UnreelAccessibilityService : AccessibilityService() {
     private suspend fun enforceFeature(
         packageName: String,
         feature: AppFeature,
+        root: AccessibilityNodeInfo,
+        isHomeFeedActive: Boolean,
         elapsedSeconds: Long
     ) {
         when (val result = usageTracker.tickAndEvaluate(packageName, feature, elapsedSeconds)) {
             is EvaluationResult.Allowed -> {
+                pendingRedirectSteps = 0
                 overlayManager.dismissBanner()
             }
             is EvaluationResult.TimedActive -> {
+                pendingRedirectSteps = 0
                 overlayManager.showCountdownWarning(result.remainingSeconds, result.warningLevel)
             }
             is EvaluationResult.Blocked -> {
-                overlayManager.showBlockedToastBanner(result.reason)
-                triggerBackOut()
+                val reason = if (feature == AppFeature.REELS) {
+                    "Reels are blocked — returning to your main feed."
+                } else {
+                    result.reason
+                }
+                overlayManager.showBlockedToastBanner(reason)
+                returnToMainFeedSafely(root, isHomeFeedActive)
             }
         }
     }
 
-    private fun triggerBackOut() {
-        val now = System.currentTimeMillis()
-        if (now - lastBlockActionMs > 450L) {
-            lastBlockActionMs = now
-            performGlobalAction(GLOBAL_ACTION_BACK)
+    private fun returnToMainFeedSafely(root: AccessibilityNodeInfo, isHomeFeedActive: Boolean) {
+        if (isHomeFeedActive) {
+            pendingRedirectSteps = 0
+            return
         }
+
+        val now = System.currentTimeMillis()
+        if (now - lastRedirectActionMs < 650L) return
+
+        if (clickHomeTabIfPresent(root)) {
+            lastRedirectActionMs = now
+            pendingRedirectSteps = 0
+            return
+        }
+
+        if (pendingRedirectSteps < 1) {
+            lastRedirectActionMs = now
+            pendingRedirectSteps += 1
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        } else {
+            activeFeature = null
+        }
+    }
+
+    private fun clickHomeTabIfPresent(root: AccessibilityNodeInfo): Boolean {
+        val candidates = root.findAccessibilityNodeInfosByText("Home")
+        for (node in candidates) {
+            if (node.isSelected) return true
+            val clickable = findClickableAncestor(node)
+            if (clickable != null && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun findClickableAncestor(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        var current = node
+        var depth = 0
+        while (current != null && depth < 5) {
+            if (current.isClickable) return current
+            current = current.parent
+            depth += 1
+        }
+        return null
     }
 
     override fun onInterrupt() {
         tickerJob?.cancel()
+        pendingRedirectSteps = 0
         overlayManager.dismissBanner()
     }
 
     override fun onDestroy() {
         tickerJob?.cancel()
+        pendingRedirectSteps = 0
         overlayManager.dismissBanner()
         super.onDestroy()
     }

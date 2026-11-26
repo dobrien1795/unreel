@@ -6,7 +6,8 @@ import com.unreel.app.data.AppFeature
 data class DetectedSurface(
     val feature: AppFeature?,
     val isDmContext: Boolean = false,
-    val isInsideReelsPlayer: Boolean = false
+    val isInsideReelsPlayer: Boolean = false,
+    val isHomeFeedActive: Boolean = false
 )
 
 class InstagramSurfaceDetector {
@@ -56,7 +57,7 @@ class InstagramSurfaceDetector {
         }
 
         if (isHomeOrStoriesSurface(rootNode)) {
-            return DetectedSurface(feature = AppFeature.HOME_AND_STORIES)
+            return DetectedSurface(feature = AppFeature.HOME_AND_STORIES, isHomeFeedActive = true)
         }
 
         return DetectedSurface(feature = null)
@@ -68,7 +69,7 @@ class InstagramSurfaceDetector {
             "com.instagram.android:id/direct_inbox_list",
             "com.instagram.android:id/message_list"
         )
-        if (dmViewIds.any { root.findAccessibilityNodeInfosByViewId(it).isNotEmpty() }) {
+        if (dmViewIds.any { hasNodeWithViewId(root, it) }) {
             return true
         }
         val dmTextHints = listOf("Message...", "Send message")
@@ -78,9 +79,10 @@ class InstagramSurfaceDetector {
     private fun isReelsPlayerVisible(root: AccessibilityNodeInfo): Boolean {
         val reelsIds = listOf(
             "com.instagram.android:id/clips_video_container",
-            "com.instagram.android:id/clips_viewer_view_pager"
+            "com.instagram.android:id/clips_viewer_view_pager",
+            "com.instagram.android:id/clips_viewer_root"
         )
-        if (reelsIds.any { root.findAccessibilityNodeInfosByViewId(it).isNotEmpty() }) {
+        if (reelsIds.any { hasNodeWithViewId(root, it) }) {
             return true
         }
         val reelsTabs = root.findAccessibilityNodeInfosByText("Reels")
@@ -90,9 +92,10 @@ class InstagramSurfaceDetector {
     private fun isExploreSurface(root: AccessibilityNodeInfo): Boolean {
         val exploreIds = listOf(
             "com.instagram.android:id/search_edit_text",
-            "com.instagram.android:id/explore_grid_container"
+            "com.instagram.android:id/explore_grid_container",
+            "com.instagram.android:id/action_bar_search_edit_text"
         )
-        if (exploreIds.any { root.findAccessibilityNodeInfosByViewId(it).isNotEmpty() }) {
+        if (exploreIds.any { hasNodeWithViewId(root, it) }) {
             return true
         }
         val searchTabs = root.findAccessibilityNodeInfosByText("Search and explore")
@@ -103,12 +106,17 @@ class InstagramSurfaceDetector {
         val homeIds = listOf(
             "com.instagram.android:id/tray_list_view",
             "com.instagram.android:id/reel_viewer_root",
-            "com.instagram.android:id/feed_list"
+            "com.instagram.android:id/feed_list",
+            "com.instagram.android:id/recycler_view"
         )
-        if (homeIds.any { root.findAccessibilityNodeInfosByViewId(it).isNotEmpty() }) {
+        if (homeIds.any { hasNodeWithViewId(root, it) }) {
             return true
         }
         val homeTabs = root.findAccessibilityNodeInfosByText("Home")
         return homeTabs.any { it.isSelected }
+    }
+
+    private fun hasNodeWithViewId(root: AccessibilityNodeInfo, viewId: String): Boolean {
+        return runCatching { root.findAccessibilityNodeInfosByViewId(viewId).isNotEmpty() }.getOrDefault(false)
     }
 }
