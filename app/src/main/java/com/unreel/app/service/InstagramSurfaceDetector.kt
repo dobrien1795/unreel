@@ -24,6 +24,15 @@ class InstagramSurfaceDetector {
     }
 
     fun detect(rootNode: AccessibilityNodeInfo): DetectedSurface {
+        // Strict isolation: only inspect Instagram package nodes; never treat other apps as Instagram surfaces
+        val pkg = rootNode.packageName?.toString()
+        if (pkg != null && pkg != "com.instagram.android") {
+            enteredReelsFromDm = false
+            dmSharedReelScrolled = false
+            lastWasDmScreen = false
+            return DetectedSurface(feature = null)
+        }
+
         val inDmThread = isDirectMessageScreen(rootNode)
 
         if (inDmThread) {
@@ -40,6 +49,7 @@ class InstagramSurfaceDetector {
             }
             lastWasDmScreen = false
 
+            // Strict DM Reels rule: single shared Reel is allowed until user scrolls to another Reel
             val isSafeSingleDmClip = enteredReelsFromDm && !dmSharedReelScrolled
             return DetectedSurface(
                 feature = if (isSafeSingleDmClip) null else AppFeature.REELS,

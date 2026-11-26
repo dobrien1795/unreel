@@ -39,16 +39,21 @@ class UnreelAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
+
+        // Strict target-app isolation: never enforce on Unreel, Settings, or any app other than Instagram
         if (pkg != "com.instagram.android") {
-            activePackage = null
-            activeFeature = null
-            pendingRedirectSteps = 0
-            overlayManager.dismissBanner()
+            clearInstagramState()
+            return
+        }
+
+        val root = rootInActiveWindow ?: return
+        val rootPkg = root.packageName?.toString()
+        if (rootPkg != null && rootPkg != "com.instagram.android") {
+            clearInstagramState()
             return
         }
 
         activePackage = pkg
-        val root = rootInActiveWindow ?: return
 
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             detector.onScrollEvent(root)
@@ -70,6 +75,13 @@ class UnreelAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun clearInstagramState() {
+        activePackage = null
+        activeFeature = null
+        pendingRedirectSteps = 0
+        overlayManager.dismissBanner()
+    }
+
     private fun startTickerLoop() {
         tickerJob?.cancel()
         tickerJob = serviceScope.launch {
@@ -79,6 +91,11 @@ class UnreelAccessibilityService : AccessibilityService() {
                 val feature = activeFeature
                 val root = rootInActiveWindow
                 if (pkg != "com.instagram.android" || feature == null || root == null) {
+                    continue
+                }
+                val rootPkg = root.packageName?.toString()
+                if (rootPkg != null && rootPkg != "com.instagram.android") {
+                    clearInstagramState()
                     continue
                 }
                 val surface = detector.detect(root)
@@ -110,7 +127,7 @@ class UnreelAccessibilityService : AccessibilityService() {
             }
             is EvaluationResult.Blocked -> {
                 val reason = if (feature == AppFeature.REELS) {
-                    "Reels are blocked — returning to your main feed."
+                    "Reels are blocked by strict guidelines — returning to main feed."
                 } else {
                     result.reason
                 }
@@ -135,6 +152,7 @@ class UnreelAccessibilityService : AccessibilityService() {
             return
         }
 
+        // Strict single-step back guard per transition so it never loops across apps
         if (pendingRedirectSteps < 1) {
             lastRedirectActionMs = now
             pendingRedirectSteps += 1
@@ -169,14 +187,12 @@ class UnreelAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         tickerJob?.cancel()
-        pendingRedirectSteps = 0
-        overlayManager.dismissBanner()
+        clearInstagramState()
     }
 
     override fun onDestroy() {
         tickerJob?.cancel()
-        pendingRedirectSteps = 0
-        overlayManager.dismissBanner()
+        clearInstagramState()
         super.onDestroy()
     }
 }

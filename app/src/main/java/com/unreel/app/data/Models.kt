@@ -36,22 +36,22 @@ data class AppPolicy(
     val rules: Map<AppFeature, FeatureRule> = mapOf(
         AppFeature.HOME_AND_STORIES to FeatureRule(
             feature = AppFeature.HOME_AND_STORIES,
-            mode = BlockMode.ALLOW,
-            sessionLimitMinutes = 15,
-            dailyLimitMinutes = 60
+            mode = BlockMode.TIMED,
+            sessionLimitMinutes = 10,
+            dailyLimitMinutes = 30
         ),
         AppFeature.REELS to FeatureRule(
             feature = AppFeature.REELS,
             mode = BlockMode.BLOCK,
-            sessionLimitMinutes = 15,
-            dailyLimitMinutes = 60,
+            sessionLimitMinutes = 5,
+            dailyLimitMinutes = 15,
             allowSingleDmItem = true
         ),
         AppFeature.EXPLORE to FeatureRule(
             feature = AppFeature.EXPLORE,
-            mode = BlockMode.ALLOW,
-            sessionLimitMinutes = 15,
-            dailyLimitMinutes = 45
+            mode = BlockMode.BLOCK,
+            sessionLimitMinutes = 5,
+            dailyLimitMinutes = 15
         )
     ),
     val settingsLockedUntilEpochMs: Long = 0L,
