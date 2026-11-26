@@ -22,13 +22,16 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install Android SDK Platform 35 & Build Tools
-        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      - name: Accept SDK Licenses and Install Platform 35
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: "current"
+          gradle-version: "8.11.1"
+          cache-provider: "basic"
 
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon
