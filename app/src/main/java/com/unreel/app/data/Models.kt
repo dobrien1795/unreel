@@ -6,7 +6,7 @@ import java.time.DayOfWeek
 @Serializable
 enum class AppFeature(val displayName: String, val subtitle: String) {
     HOME_AND_STORIES("Home Feed & Stories", "Main scrolling feed and top story tray"),
-    REELS("Reels", "Short-form vertical video feed (DM single-clip safe)"),
+    REELS("Reels", "Short-form vertical video feed"),
     EXPLORE("Explore & Search Grid", "Discovery grid and suggested content")
 }
 
@@ -22,9 +22,13 @@ data class FeatureRule(
     val feature: AppFeature,
     val mode: BlockMode = BlockMode.TIMED,
     val sessionLimitMinutes: Int = 15,
-    val dailyLimitMinutes: Int = 60,
+    val dailyUsesAllowed: Int = 4,
+    val cooldownMinutes: Int = 1,
     val allowSingleDmItem: Boolean = true
-)
+) {
+    val dailyLimitMinutes: Int
+        get() = (sessionLimitMinutes * dailyUsesAllowed).coerceAtLeast(sessionLimitMinutes)
+}
 
 @Serializable
 data class AppPolicy(
@@ -36,22 +40,25 @@ data class AppPolicy(
     val rules: Map<AppFeature, FeatureRule> = mapOf(
         AppFeature.HOME_AND_STORIES to FeatureRule(
             feature = AppFeature.HOME_AND_STORIES,
-            mode = BlockMode.TIMED,
-            sessionLimitMinutes = 10,
-            dailyLimitMinutes = 30
+            mode = BlockMode.ALLOW,
+            sessionLimitMinutes = 15,
+            dailyUsesAllowed = 4,
+            cooldownMinutes = 1
         ),
         AppFeature.REELS to FeatureRule(
             feature = AppFeature.REELS,
             mode = BlockMode.BLOCK,
-            sessionLimitMinutes = 5,
-            dailyLimitMinutes = 15,
+            sessionLimitMinutes = 15,
+            dailyUsesAllowed = 4,
+            cooldownMinutes = 1,
             allowSingleDmItem = true
         ),
         AppFeature.EXPLORE to FeatureRule(
             feature = AppFeature.EXPLORE,
-            mode = BlockMode.BLOCK,
-            sessionLimitMinutes = 5,
-            dailyLimitMinutes = 15
+            mode = BlockMode.ALLOW,
+            sessionLimitMinutes = 15,
+            dailyUsesAllowed = 4,
+            cooldownMinutes = 1
         )
     ),
     val settingsLockedUntilEpochMs: Long = 0L,
@@ -63,6 +70,7 @@ data class FeatureUsageState(
     val dateIso: String = "",
     val dailyUsedSeconds: Long = 0L,
     val currentSessionUsedSeconds: Long = 0L,
+    val sessionsUsedToday: Int = 0,
     val lastActiveEpochMs: Long = 0L,
     val cooldownUntilEpochMs: Long = 0L
 )
