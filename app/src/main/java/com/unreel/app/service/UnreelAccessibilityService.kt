@@ -27,7 +27,8 @@ class UnreelAccessibilityService : AccessibilityService() {
     private var activeFeature: AppFeature? = null
     private var tickerJob: Job? = null
     private var lastRedirectActionMs: Long = 0L
-    private var pendingRedirectSteps: Int = 0
+    private var redirectAttemptsForFeature: Int = 0
+    private var lastEnforcedFeature: AppFeature? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -59,11 +60,15 @@ class UnreelAccessibilityService : AccessibilityService() {
         }
 
         val surface = detector.detect(root)
+        if (surface.feature != lastEnforcedFeature) {
+            redirectAttemptsForFeature = 0
+            lastEnforcedFeature = surface.feature
+        }
         activeFeature = surface.feature
 
         if (surface.feature == null) {
             if (surface.isHomeFeedActive) {
-                pendingRedirectSteps = 0
+                redirectAttemptsForFeature = 0
             }
             overlayManager.dismissBanner()
             return
@@ -77,7 +82,8 @@ class UnreelAccessibilityService : AccessibilityService() {
     private fun clearInstagramState() {
         activePackage = null
         activeFeature = null
-        pendingRedirectSteps = 0
+        lastEnforcedFeature = null
+        redirectAttemptsForFeature = 0
         overlayManager.dismissBanner()
     }
 
@@ -100,9 +106,16 @@ class UnreelAccessibilityService : AccessibilityService() {
                 val surface = detector.detect(root)
                 if (surface.feature == null) {
                     activeFeature = null
+                    lastEnforcedFeature = null
+                    redirectAttemptsForFeature = 0
                     overlayManager.dismissBanner()
                     continue
                 }
+                if (surface.feature != lastEnforcedFeature) {
+                    redirectAttemptsForFeature = 0
+                    lastEnforcedFeature = surface.feature
+                }
+                activeFeature = surface.feature
                 enforceFeature(pkg, surface.feature, root, surface.isHomeFeedActive, elapsedSeconds = 1L)
             }
         }
@@ -117,11 +130,11 @@ class UnreelAccessibilityService : AccessibilityService() {
     ) {
         when (val result = usageTracker.tickAndEvaluate(packageName, feature, elapsedSeconds)) {
             is EvaluationResult.Allowed -> {
-                pendingRedirectSteps = 0
+                redirectAttemptsForFeature = 0
                 overlayManager.dismissBanner()
             }
             is EvaluationResult.TimedActive -> {
-                pendingRedirectSteps = 0
+                redirectAttemptsForFeature = 0
                 overlayManager.showCountdownWarning(result.sessionRemainingSeconds, result.warningLevel)
             }
             is EvaluationResult.Blocked -> {
@@ -135,40 +148,44 @@ class UnreelAccessibilityService : AccessibilityService() {
                     sectionName = feature.displayName,
                     timeExpired = result.timeExpired
                 )
-                if (feature == AppFeature.REELS) {
-                    returnToMainFeedSafely(root, isHomeFeedActive)
+                // Only redirect back to Home when the active feature itself is blocked/expired
+                if (feature == AppFeature.REELS || feature == AppFeature.EXPLORE || feature == AppFeature.HOME_AND_STORIES) {
+                    returnToMainFeedSafely(root, feature, isHomeFeedActive)
                 }
             }
         }
     }
 
-    private fun returnToMainFeedSafely(root: AccessibilityNodeInfo, isHomeFeedActive: Boolean) {
-        if (isHomeFeedActive) {
-            pendingRedirectSteps = 0
+    private fun returnToMainFeedSafely(
+        root: AccessibilityNodeInfo,
+        blockedFeature: AppFeature,
+        isHomeFeedActive: Boolean
+    ) {
+        if (blockedFeature == AppFeature.HOME_AND_STORIES && isHomeFeedActive) {
             return
         }
 
         val now = System.currentTimeMillis()
         if (now - lastRedirectActionMs < 650L) return
 
-        if (clickHomeTabIfPresent(root)) {
+        // Prefer clicking the Home tab directly so we don't accidentally exit DM/other screens
+        if (blockedFeature != AppFeature.HOME_AND_STORIES && clickHomeTabIfPresent(root)) {
             lastRedirectActionMs = now
-            pendingRedirectSteps = 0
+            redirectAttemptsForFeature += 1
             return
         }
 
-        if (pendingRedirectSteps < 1) {
+        if (redirectAttemptsForFeature < 2) {
             lastRedirectActionMs = now
-            pendingRedirectSteps += 1
+            redirectAttemptsForFeature += 1
             performGlobalAction(GLOBAL_ACTION_BACK)
-        } else {
-            activeFeature = null
         }
     }
 
     private fun clickHomeTabIfPresent(root: AccessibilityNodeInfo): Boolean {
         val candidates = root.findAccessibilityNodeInfosByText("Home")
         for (node in candidates) {
+            if (!node.isVisibleToUser) continue
             if (node.isSelected) return true
             val clickable = findClickableAncestor(node)
             if (clickable != null && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {

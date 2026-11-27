@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
@@ -15,8 +17,10 @@ import com.unreel.app.data.WarningLevel
 class OverlayAlertManager(private val context: Context) {
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var bannerView: View? = null
     private var lastShownSignature: String? = null
+    private var autoDismissRunnable: Runnable? = null
 
     fun showCountdownWarning(remainingSeconds: Long, level: WarningLevel) {
         if (!Settings.canDrawOverlays(context)) return
@@ -24,6 +28,8 @@ class OverlayAlertManager(private val context: Context) {
             dismissBanner()
             return
         }
+
+        cancelAutoDismiss()
 
         val mins = remainingSeconds / 60
         val secs = remainingSeconds % 60
@@ -34,8 +40,10 @@ class OverlayAlertManager(private val context: Context) {
             "Unreel: $formatted remaining"
         }
 
-        if (bannerView != null && (bannerView as? TextView) != null) {
-            (bannerView as TextView).text = label
+        val existingPill = bannerView as? TextView
+        if (existingPill != null && lastShownSignature?.startsWith("WARN:") == true) {
+            existingPill.text = label
+            lastShownSignature = "WARN:$label"
             return
         }
 
@@ -134,15 +142,23 @@ class OverlayAlertManager(private val context: Context) {
             windowManager.addView(container, params)
             bannerView = container
             lastShownSignature = signature
-            container.postDelayed({ dismissBanner() }, 2800L)
+            val dismissTask = Runnable { dismissBanner() }
+            autoDismissRunnable = dismissTask
+            mainHandler.postDelayed(dismissTask, 2800L)
         }
     }
 
     fun dismissBanner() {
+        cancelAutoDismiss()
         bannerView?.let { view ->
             runCatching { windowManager.removeView(view) }
             bannerView = null
             lastShownSignature = null
         }
+    }
+
+    private fun cancelAutoDismiss() {
+        autoDismissRunnable?.let { mainHandler.removeCallbacks(it) }
+        autoDismissRunnable = null
     }
 }

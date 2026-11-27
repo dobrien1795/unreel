@@ -316,32 +316,41 @@ private fun FeatureControlCard(
             }
 
             if (rule.mode == BlockMode.TIMED && !disabledByMaster) {
-                val sessionMins = rule.sessionLimitMinutes.coerceIn(5, 60)
-                val usesPerDay = rule.dailyUsesAllowed.coerceIn(1, 8)
+                var draftSessionMins by remember(feature, rule.sessionLimitMinutes) {
+                    mutableFloatStateOf(rule.sessionLimitMinutes.coerceIn(1, 60).toFloat())
+                }
+                var draftUsesPerDay by remember(feature, rule.dailyUsesAllowed) {
+                    mutableFloatStateOf(rule.dailyUsesAllowed.coerceIn(1, 8).toFloat())
+                }
 
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = "Session Timer: ${sessionMins}m per session",
+                        text = "Session Timer: ${draftSessionMins.toInt()}m per session",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium
                     )
                     Slider(
-                        value = sessionMins.toFloat(),
-                        onValueChange = { onSessionTimerChange(it.toInt().coerceIn(5, 60)) },
-                        valueRange = 5f..60f,
-                        steps = 10
+                        value = draftSessionMins,
+                        onValueChange = { draftSessionMins = it },
+                        onValueChangeFinished = {
+                            onSessionTimerChange(draftSessionMins.toInt().coerceIn(1, 60))
+                        },
+                        valueRange = 1f..60f
                     )
                 }
 
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = "Times Allowed in 24h: $usesPerDay× (${rule.cooldownMinutes}m break between sessions)",
+                        text = "Times Allowed in 24h: ${draftUsesPerDay.toInt()}× (${rule.cooldownMinutes}m break between sessions)",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium
                     )
                     Slider(
-                        value = usesPerDay.toFloat(),
-                        onValueChange = { onDailyUsesChange(it.toInt().coerceIn(1, 8)) },
+                        value = draftUsesPerDay,
+                        onValueChange = { draftUsesPerDay = it },
+                        onValueChangeFinished = {
+                            onDailyUsesChange(draftUsesPerDay.toInt().coerceIn(1, 8))
+                        },
                         valueRange = 1f..8f,
                         steps = 6
                     )
