@@ -60,13 +60,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateFeatureTimers(feature: AppFeature, sessionMins: Int, dailyMins: Int) {
+    fun updateSessionTimer(feature: AppFeature, sessionMinutes: Int) {
         updatePolicy { policy ->
             val currentRule = policy.rules[feature] ?: FeatureRule(feature)
             val updatedRules = policy.rules.toMutableMap()
             updatedRules[feature] = currentRule.copy(
-                sessionLimitMinutes = sessionMins.coerceIn(1, 120),
-                dailyLimitMinutes = dailyMins.coerceIn(sessionMins, 480)
+                sessionLimitMinutes = sessionMinutes.coerceIn(1, 120)
+            )
+            policy.copy(rules = updatedRules)
+        }
+    }
+
+    fun updateDailyUses(feature: AppFeature, dailyUses: Int) {
+        updatePolicy { policy ->
+            val currentRule = policy.rules[feature] ?: FeatureRule(feature)
+            val updatedRules = policy.rules.toMutableMap()
+            updatedRules[feature] = currentRule.copy(
+                dailyUsesAllowed = dailyUses.coerceIn(1, 12)
             )
             policy.copy(rules = updatedRules)
         }
