@@ -6,10 +6,17 @@ import java.time.ZoneId
 sealed class EvaluationResult {
     data object Allowed : EvaluationResult()
     data class TimedActive(
-        val remainingSeconds: Long,
+        val sessionRemainingSeconds: Long,
+        val sessionsRemainingToday: Int,
+        val totalSessionsAllowed: Int,
         val warningLevel: WarningLevel
     ) : EvaluationResult()
-    data class Blocked(val reason: String) : EvaluationResult()
+    data class Blocked(
+        val reason: String,
+        val sessionRemainingSeconds: Long = 0L,
+        val cooldownRemainingSeconds: Long = 0L,
+        val timeExpired: Boolean = false
+    ) : EvaluationResult()
 }
 
 enum class WarningLevel {
@@ -21,9 +28,7 @@ enum class WarningLevel {
 class UsageTracker(private val repository: PolicyRepository) {
 
     companion object {
-        // Strict guidelines: short idle reset (2m) and longer cooldown (30m)
         private const val SESSION_IDLE_RESET_MS = 2 * 60 * 1000L
-        private const val SESSION_COOLDOWN_MS = 30 * 60 * 1000L
     }
 
     suspend fun tickAndEvaluate(
@@ -43,14 +48,20 @@ class UsageTracker(private val repository: PolicyRepository) {
         }
 
         if (policy.blockAllFeatures) {
-            return EvaluationResult.Blocked("Strict rule: All Instagram features are blocked.")
+            return EvaluationResult.Blocked(
+                reason = "All features are set to blocked in Unreel.",
+                timeExpired = false
+            )
         }
 
         val rule = policy.rules[feature] ?: return EvaluationResult.Allowed
 
         return when (rule.mode) {
             BlockMode.ALLOW -> EvaluationResult.Allowed
-            BlockMode.BLOCK -> EvaluationResult.Blocked("Strict rule: ${feature.displayName} is blocked.")
+            BlockMode.BLOCK -> EvaluationResult.Blocked(
+                reason = "${feature.displayName} are blocked in Unreel.",
+                timeExpired = false
+            )
             BlockMode.TIMED -> evaluateTimedRule(feature, rule, elapsedSeconds, today.toString(), nowMs)
         }
     }
@@ -71,10 +82,34 @@ class UsageTracker(private val repository: PolicyRepository) {
             prev
         }
 
+        val maxUses = rule.dailyUsesAllowed.coerceAtLeast(1)
+        val sessionCapSeconds = (rule.sessionLimitMinutes.coerceAtLeast(1)) * 60L
+        val cooldownMs = (rule.cooldownMinutes.coerceAtLeast(1)) * 60_000L
+
         if (state.cooldownUntilEpochMs > nowMs) {
-            val minsLeft = ((state.cooldownUntilEpochMs - nowMs) / 60_000L) + 1
+            val cdRemainingSecs = ((state.cooldownUntilEpochMs - nowMs) / 1000L).coerceAtLeast(1L)
+            val minsLeft = (cdRemainingSecs / 60L) + 1
             return EvaluationResult.Blocked(
-                "Strict cooldown active for ${feature.displayName} (${minsLeft}m left)."
+                reason = "Your time has run out — wait ${minsLeft}m before going back to ${feature.displayName}.",
+                sessionRemainingSeconds = 0L,
+                cooldownRemainingSeconds = cdRemainingSecs,
+                timeExpired = true
+            )
+        }
+
+        if (state.cooldownUntilEpochMs in 1L..nowMs) {
+            state = state.copy(
+                cooldownUntilEpochMs = 0L,
+                currentSessionUsedSeconds = 0L
+            )
+        }
+
+        if (state.sessionsUsedToday >= maxUses) {
+            return EvaluationResult.Blocked(
+                reason = "Your time has run out — all $maxUses daily sessions used for ${feature.displayName}.",
+                sessionRemainingSeconds = 0L,
+                cooldownRemainingSeconds = 0L,
+                timeExpired = true
             )
         }
 
@@ -86,35 +121,34 @@ class UsageTracker(private val repository: PolicyRepository) {
         val updatedDaily = state.dailyUsedSeconds + safeElapsed
         val updatedSession = state.currentSessionUsedSeconds + safeElapsed
 
-        val dailyCapSeconds = rule.dailyLimitMinutes * 60L
-        val sessionCapSeconds = rule.sessionLimitMinutes * 60L
-
-        if (updatedDaily >= dailyCapSeconds) {
-            val lockedState = state.copy(
-                dailyUsedSeconds = dailyCapSeconds,
-                currentSessionUsedSeconds = updatedSession,
-                lastActiveEpochMs = nowMs
-            )
-            if (safeElapsed > 0L) {
-                persistFeatureState(snapshot, feature, lockedState)
-            }
-            return EvaluationResult.Blocked(
-                "Strict daily cap (${rule.dailyLimitMinutes}m) reached for ${feature.displayName}."
-            )
-        }
-
         if (updatedSession >= sessionCapSeconds) {
-            val cooldownState = state.copy(
+            val completedSessions = (state.sessionsUsedToday + 1).coerceAtMost(maxUses)
+            val hasMoreSessions = completedSessions < maxUses
+            val nextCooldownUntil = if (hasMoreSessions) nowMs + cooldownMs else 0L
+
+            val updatedState = state.copy(
                 dailyUsedSeconds = updatedDaily,
                 currentSessionUsedSeconds = 0L,
+                sessionsUsedToday = completedSessions,
                 lastActiveEpochMs = nowMs,
-                cooldownUntilEpochMs = nowMs + SESSION_COOLDOWN_MS
+                cooldownUntilEpochMs = nextCooldownUntil
             )
             if (safeElapsed > 0L) {
-                persistFeatureState(snapshot, feature, cooldownState)
+                persistFeatureState(snapshot, feature, updatedState)
             }
+
+            val cdSecs = if (hasMoreSessions) cooldownMs / 1000L else 0L
+            val reason = if (hasMoreSessions) {
+                "Your ${rule.sessionLimitMinutes}m session is up — wait ${rule.cooldownMinutes}m to go back."
+            } else {
+                "Your time has run out — all $maxUses sessions completed for ${feature.displayName}."
+            }
+
             return EvaluationResult.Blocked(
-                "Strict session cap (${rule.sessionLimitMinutes}m) reached — 30m cooldown started."
+                reason = reason,
+                sessionRemainingSeconds = 0L,
+                cooldownRemainingSeconds = cdSecs,
+                timeExpired = true
             )
         }
 
@@ -127,18 +161,19 @@ class UsageTracker(private val repository: PolicyRepository) {
             persistFeatureState(snapshot, feature, nextState)
         }
 
-        val remainingSession = sessionCapSeconds - updatedSession
-        val remainingDaily = dailyCapSeconds - updatedDaily
-        val minRemaining = minOf(remainingSession, remainingDaily)
+        val remainingSession = (sessionCapSeconds - updatedSession).coerceAtLeast(0L)
+        val remainingUses = (maxUses - state.sessionsUsedToday).coerceAtLeast(0)
 
         val warning = when {
-            minRemaining <= 30L -> WarningLevel.THIRTY_SECONDS
-            minRemaining <= 120L -> WarningLevel.TWO_MINUTES
+            remainingSession <= 30L -> WarningLevel.THIRTY_SECONDS
+            remainingSession <= 120L -> WarningLevel.TWO_MINUTES
             else -> WarningLevel.NONE
         }
 
         return EvaluationResult.TimedActive(
-            remainingSeconds = minRemaining,
+            sessionRemainingSeconds = remainingSession,
+            sessionsRemainingToday = remainingUses,
+            totalSessionsAllowed = maxUses,
             warningLevel = warning
         )
     }
