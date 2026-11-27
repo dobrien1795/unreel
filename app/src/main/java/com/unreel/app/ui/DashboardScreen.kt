@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import com.unreel.app.R
 import com.unreel.app.data.*
+import kotlinx.coroutines.delay
 import java.time.DayOfWeek
 import java.time.format.TextStyle
 import java.util.Locale
@@ -36,6 +37,14 @@ fun DashboardScreen(viewModel: MainViewModel) {
 
     val isOverlayGranted = remember(context) { mutableStateOf(Settings.canDrawOverlays(context)) }
     val isLocked = policy.strictLockMode && System.currentTimeMillis() < policy.settingsLockedUntilEpochMs
+
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(1000L)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -119,7 +128,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                         ) {
                             Column {
                                 Text("Target App: Instagram", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Text("Only restricted features trigger actions", style = MaterialTheme.typography.bodySmall)
+                                Text("Only features set in Unreel are enforced", style = MaterialTheme.typography.bodySmall)
                             }
                             Switch(
                                 checked = policy.enabled,
@@ -136,7 +145,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                         ) {
                             Column(Modifier.weight(1f)) {
                                 Text("Block All Features", fontWeight = FontWeight.SemiBold)
-                                Text("Lock Feed, Stories, Reels & Explore together", style = MaterialTheme.typography.bodySmall)
+                                Text("Only enable when you want all features blocked", style = MaterialTheme.typography.bodySmall)
                             }
                             Switch(
                                 checked = policy.blockAllFeatures,
@@ -164,18 +173,27 @@ fun DashboardScreen(viewModel: MainViewModel) {
                         }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             DayOfWeek.entries.forEach { day ->
                                 val selected = policy.activeDays.contains(day)
+                                val firstLetter = day.getDisplayName(TextStyle.NARROW, Locale.getDefault()).take(1)
                                 FilterChip(
                                     selected = selected,
                                     onClick = { viewModel.toggleDay(day) },
+                                    modifier = Modifier.weight(1f),
                                     label = {
-                                        Text(
-                                            text = day.getDisplayName(TextStyle.SHORT, Locale.getDefault()).take(2),
-                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                                        )
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = firstLetter,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
                                     },
                                     border = BorderStroke(
                                         width = if (selected) 1.5.dp else 1.dp,
@@ -203,9 +221,11 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     feature = feature,
                     rule = rule,
                     usage = featureUsage,
+                    nowMs = nowMs,
                     disabledByMaster = !policy.enabled || policy.blockAllFeatures,
                     onModeChange = { viewModel.updateFeatureMode(feature, it) },
-                    onTimerChange = { session, daily -> viewModel.updateFeatureTimers(feature, session, daily) }
+                    onSessionTimerChange = { mins -> viewModel.updateSessionTimer(feature, mins) },
+                    onDailyUsesChange = { uses -> viewModel.updateDailyUses(feature, uses) }
                 )
             }
         }
@@ -254,11 +274,20 @@ private fun FeatureControlCard(
     feature: AppFeature,
     rule: FeatureRule,
     usage: FeatureUsageState?,
+    nowMs: Long,
     disabledByMaster: Boolean,
     onModeChange: (BlockMode) -> Unit,
-    onTimerChange: (Int, Int) -> Unit
+    onSessionTimerChange: (Int) -> Unit,
+    onDailyUsesChange: (Int) -> Unit
 ) {
-    val usedMinsToday = (usage?.dailyUsedSeconds ?: 0L) / 60L
+    val sessionCapSeconds = rule.sessionLimitMinutes.coerceAtLeast(1) * 60L
+    val sessionUsedSeconds = (usage?.currentSessionUsedSeconds ?: 0L).coerceAtLeast(0L)
+    val sessionLeftSeconds = (sessionCapSeconds - sessionUsedSeconds).coerceAtLeast(0L)
+    val cooldownLeftSeconds = if ((usage?.cooldownUntilEpochMs ?: 0L) > nowMs) {
+        ((usage!!.cooldownUntilEpochMs - nowMs) / 1000L).coerceAtLeast(0L)
+    } else {
+        0L
+    }
 
     Card(shape = RoundedCornerShape(16.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -271,21 +300,6 @@ private fun FeatureControlCard(
                     Text(feature.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(feature.subtitle, style = MaterialTheme.typography.bodySmall)
                 }
-                if (rule.mode == BlockMode.TIMED) {
-                    Text(
-                        text = "${usedMinsToday}m / ${rule.dailyLimitMinutes}m",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-
-            if (feature == AppFeature.REELS) {
-                Text(
-                    "Single Reels sent in DMs remain playable; scrolling to next Reel returns to main feed.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary
-                )
             }
 
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -302,25 +316,64 @@ private fun FeatureControlCard(
             }
 
             if (rule.mode == BlockMode.TIMED && !disabledByMaster) {
-                val combinedMinutes = rule.sessionLimitMinutes.coerceIn(5, 60)
-                val syncedDailyMinutes = (combinedMinutes * 3).coerceIn(15, 180)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val sessionMins = rule.sessionLimitMinutes.coerceIn(5, 60)
+                val usesPerDay = rule.dailyUsesAllowed.coerceIn(1, 8)
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = "Session & Daily Timer: ${combinedMinutes}m session / ${syncedDailyMinutes}m daily",
-                        style = MaterialTheme.typography.bodySmall
+                        text = "Session Timer: ${sessionMins}m per session",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium
                     )
                     Slider(
-                        value = combinedMinutes.toFloat(),
-                        onValueChange = { selected ->
-                            val sessionVal = selected.toInt().coerceIn(5, 60)
-                            val dailyVal = (sessionVal * 3).coerceIn(15, 180)
-                            onTimerChange(sessionVal, dailyVal)
-                        },
+                        value = sessionMins.toFloat(),
+                        onValueChange = { onSessionTimerChange(it.toInt().coerceIn(5, 60)) },
                         valueRange = 5f..60f,
                         steps = 10
                     )
                 }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Times Allowed in 24h: $usesPerDay× (${rule.cooldownMinutes}m break between sessions)",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Slider(
+                        value = usesPerDay.toFloat(),
+                        onValueChange = { onDailyUsesChange(it.toInt().coerceIn(1, 8)) },
+                        valueRange = 1f..8f,
+                        steps = 6
+                    )
+                }
+            }
+
+            if (rule.mode == BlockMode.BLOCK || rule.mode == BlockMode.TIMED) {
+                val statusText = when {
+                    rule.mode == BlockMode.BLOCK ->
+                        "Session left: 0:00 (Blocked in settings)"
+                    cooldownLeftSeconds > 0L ->
+                        "Session left: 0:00 • Break left: ${formatDuration(cooldownLeftSeconds)}"
+                    else ->
+                        "Session left: ${formatDuration(sessionLeftSeconds)} • Uses left today: ${(rule.dailyUsesAllowed - (usage?.sessionsUsedToday ?: 0)).coerceAtLeast(0)}/${rule.dailyUsesAllowed}"
+                }
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (rule.mode == BlockMode.BLOCK || cooldownLeftSeconds > 0L) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                )
             }
         }
     }
+}
+
+private fun formatDuration(totalSeconds: Long): String {
+    val safe = totalSeconds.coerceAtLeast(0L)
+    val mins = safe / 60L
+    val secs = safe % 60L
+    return String.format(Locale.getDefault(), "%d:%02d", mins, secs)
 }
