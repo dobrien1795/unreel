@@ -16,6 +16,7 @@ class OverlayAlertManager(private val context: Context) {
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var bannerView: View? = null
+    private var lastShownSignature: String? = null
 
     fun showCountdownWarning(remainingSeconds: Long, level: WarningLevel) {
         if (!Settings.canDrawOverlays(context)) return
@@ -68,11 +69,28 @@ class OverlayAlertManager(private val context: Context) {
         runCatching {
             windowManager.addView(pill, params)
             bannerView = pill
+            lastShownSignature = "WARN:$label"
         }
     }
 
-    fun showBlockedToastBanner(reason: String) {
+    fun showBlockedToastBanner(
+        reason: String,
+        sectionName: String = "Reels",
+        timeExpired: Boolean = false
+    ) {
         if (!Settings.canDrawOverlays(context)) return
+
+        val heading = if (timeExpired) {
+            "Time's up — $sectionName closed"
+        } else {
+            "$sectionName are blocked"
+        }
+
+        val signature = "BLOCK:$heading|$reason"
+        if (bannerView != null && lastShownSignature == signature) {
+            return
+        }
+
         dismissBanner()
 
         val container = LinearLayout(context).apply {
@@ -81,17 +99,20 @@ class OverlayAlertManager(private val context: Context) {
             background = GradientDrawable().apply {
                 cornerRadius = 36f
                 setColor(Color.parseColor("#181C24"))
-                setStroke(3, Color.parseColor("#8AB4F8"))
+                setStroke(
+                    3,
+                    if (timeExpired) Color.parseColor("#F28B82") else Color.parseColor("#8AB4F8")
+                )
             }
         }
 
         val title = TextView(context).apply {
-            text = "Reels are blocked"
-            setTextColor(Color.parseColor("#8AB4F8"))
-            textSize = 15f
+            text = heading
+            setTextColor(if (timeExpired) Color.parseColor("#F28B82") else Color.parseColor("#8AB4F8"))
+            textSize = 16f
         }
         val body = TextView(context).apply {
-            text = reason
+            text = if (timeExpired) "Your time has run out. $reason" else reason
             setTextColor(Color.WHITE)
             textSize = 13f
         }
@@ -112,7 +133,8 @@ class OverlayAlertManager(private val context: Context) {
         runCatching {
             windowManager.addView(container, params)
             bannerView = container
-            container.postDelayed({ dismissBanner() }, 2400L)
+            lastShownSignature = signature
+            container.postDelayed({ dismissBanner() }, 2800L)
         }
     }
 
@@ -120,6 +142,7 @@ class OverlayAlertManager(private val context: Context) {
         bannerView?.let { view ->
             runCatching { windowManager.removeView(view) }
             bannerView = null
+            lastShownSignature = null
         }
     }
 }

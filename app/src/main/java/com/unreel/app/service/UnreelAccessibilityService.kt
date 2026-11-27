@@ -40,7 +40,6 @@ class UnreelAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
 
-        // Strict target-app isolation: never enforce on Unreel, Settings, or any app other than Instagram
         if (pkg != "com.instagram.android") {
             clearInstagramState()
             return
@@ -123,16 +122,22 @@ class UnreelAccessibilityService : AccessibilityService() {
             }
             is EvaluationResult.TimedActive -> {
                 pendingRedirectSteps = 0
-                overlayManager.showCountdownWarning(result.remainingSeconds, result.warningLevel)
+                overlayManager.showCountdownWarning(result.sessionRemainingSeconds, result.warningLevel)
             }
             is EvaluationResult.Blocked -> {
-                val reason = if (feature == AppFeature.REELS) {
-                    "Reels are blocked by strict guidelines — returning to main feed."
+                val reason = if (feature == AppFeature.REELS && !result.timeExpired) {
+                    "Reels are blocked — returning to main feed."
                 } else {
                     result.reason
                 }
-                overlayManager.showBlockedToastBanner(reason)
-                returnToMainFeedSafely(root, isHomeFeedActive)
+                overlayManager.showBlockedToastBanner(
+                    reason = reason,
+                    sectionName = feature.displayName,
+                    timeExpired = result.timeExpired
+                )
+                if (feature == AppFeature.REELS) {
+                    returnToMainFeedSafely(root, isHomeFeedActive)
+                }
             }
         }
     }
@@ -152,7 +157,6 @@ class UnreelAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Strict single-step back guard per transition so it never loops across apps
         if (pendingRedirectSteps < 1) {
             lastRedirectActionMs = now
             pendingRedirectSteps += 1
